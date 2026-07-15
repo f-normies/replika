@@ -20,6 +20,7 @@ let package = Package(
         .executableTarget(
             name: "asr-probe",
             dependencies: [.product(name: "Qwen3ASR", package: "speech-swift")]
-        )
+        ),
+        .testTarget(name: "ReplikaCoreTests", dependencies: ["ReplikaCore"])
     ]
 )
