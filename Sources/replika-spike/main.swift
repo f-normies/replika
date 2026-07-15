@@ -12,7 +12,14 @@ while let arg = args.first {
     args.removeFirst()
     switch arg {
     case "--quant":
-        if let v = args.first, let q = Quant(rawValue: v) { quant = q; args.removeFirst() }
+        guard let v = args.first else {
+            FileHandle.standardError.write(Data("error: --quant requires a value (q4|q8)\n".utf8)); exit(2)
+        }
+        args.removeFirst()
+        guard let q = Quant(rawValue: v) else {
+            FileHandle.standardError.write(Data("error: invalid --quant '\(v)' (use q4 or q8)\n".utf8)); exit(2)
+        }
+        quant = q
     case "--no-diarize":
         diarize = false
     default:
@@ -29,7 +36,13 @@ let url = URL(fileURLWithPath: filePath)
 let clipName = url.lastPathComponent
 
 // Audio duration for RTF denominator.
-let samples = try AudioLoader.loadMono16k(url)
+let samples: [Float]
+do {
+    samples = try AudioLoader.loadMono16k(url)
+} catch {
+    FileHandle.standardError.write(Data("error: cannot load audio at \(filePath): \(error)\n".utf8))
+    exit(2)
+}
 let audioSeconds = Double(samples.count) / 16000.0
 
 // Build provider via registry (proves the swap point).
@@ -62,8 +75,8 @@ for try await ev in provider.transcribe(.file(url), options: options) {
     }
 }
 
-let wall = Double((clock.now - start).components.seconds) +
-           Double((clock.now - start).components.attoseconds) / 1e18
+let elapsed = clock.now - start
+let wall = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
 poller.cancel()
 
 let result = BenchResult(
