@@ -1,0 +1,11 @@
+.build/
+.swiftpm/
+*.xcodeproj
+.DS_Store
+
+# Private audio — never commit recordings or fixtures
+*.m4a
+*.wav
+*.mp3
+*.flac
+*.aac
