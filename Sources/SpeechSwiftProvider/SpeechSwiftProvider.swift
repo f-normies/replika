@@ -14,18 +14,26 @@ public enum ProviderError: Error {
 // `fromPretrained(modelId:)` instead auto-detects size/bits by substring
 // matching on the model-id string itself (`ASRModelSize.detect`/`.detectBits`
 // in Qwen3ASR.swift; `ForcedAlignerVariant.detect` in ForcedAligner.swift —
-// reconciled against source in Task 2's report). Both tiers below pin the
-// same 0.6B model size for the ASR model — only the quantization changes —
-// so a q4 vs. q8 bench comparison isolates the quant effect.
+// reconciled against source in Task 2's report).
+//
+// ASR model size: pinned to Qwen3-ASR-**1.7B** per the spec/architecture
+// default (acceptance criterion 1) — both quant tiers below select the 1.7B
+// weights, only the quantization bit-width changes, so a q4 vs. q8 bench
+// comparison isolates the quant effect.
+//
+// Forced-aligner model size: stays **0.6B** for both tiers — the aligner has
+// no 1.7B variant upstream (only `ForcedAlignerVariant.mlx4bit`/`.mlx8bit`,
+// both 0.6B), so this is an unavoidable size mismatch with the ASR model,
+// not an oversight.
 private extension Quant {
     /// Argument for `Qwen3ASRModel.fromPretrained(modelId:)`.
     var asrModelId: String {
         switch self {
-        case .q4: return Qwen3ASRModel.defaultModelId
-        // "aufklarer/Qwen3-ASR-0.6B-MLX-8bit": the small-size 8-bit variant.
-        // Referenced only in an in-package RAM-warning string
-        // (Qwen3ASR.swift:1189), not exposed as a named constant.
-        case .q8: return "aufklarer/Qwen3-ASR-0.6B-MLX-8bit"
+        // "aufklarer/Qwen3-ASR-1.7B-MLX-4bit": referenced only in an
+        // in-package RAM-warning string (Qwen3ASR.swift:1190), not exposed
+        // as a named constant upstream (unlike `.largeModelId` below).
+        case .q4: return "aufklarer/Qwen3-ASR-1.7B-MLX-4bit"
+        case .q8: return Qwen3ASRModel.largeModelId
         }
     }
 
@@ -57,6 +65,15 @@ private extension Quant {
 ///   - `DiarizedSegment` has `.startTime: Float`, `.endTime: Float`,
 ///     `.speakerId: Int` (all `Float`, not `Double` — needs an explicit
 ///     conversion into `SpeakerTag`, which stores `Double`).
+///
+/// - Important: Concurrency contract — this provider supports **one active
+///   transcription per instance**. `transcribe(_:options:)` stores its
+///   in-flight `Task` in `self.task` under a lock; calling it again before
+///   the previous stream finishes overwrites the tracked task with the new
+///   one. `cancel()` only ever cancels whatever `self.task` currently holds,
+///   so it reaches the latest call, not any earlier still-running one. Run
+///   concurrent transcriptions from separate `SpeechSwiftProvider` instances
+///   if independent cancellation is required.
 public final class SpeechSwiftProvider: TranscriptionProvider, @unchecked Sendable {
     public let capabilities = ProviderCaps(diarization: true, wordTimestamps: true, streaming: false)
 

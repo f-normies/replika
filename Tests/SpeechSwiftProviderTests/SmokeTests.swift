@@ -42,6 +42,10 @@ func smokeProducesLabeledSegments() async throws {
     #expect(!transcript.segments.isEmpty)
     #expect(transcript.segments.allSatisfy { !$0.text.isEmpty })
     #expect(sawSpeaker)
+    // Guards against a silent `SpeakerMerger` failure: raw `.speaker` stream
+    // events (`sawSpeaker` above) only prove diarization ran, not that the
+    // merge step actually attached labels to the final segments.
+    #expect(transcript.segments.contains(where: { $0.speaker != nil }))
     for seg in transcript.segments where seg.words.count > 1 {
         for i in 1..<seg.words.count {
             #expect(seg.words[i].start >= seg.words[i - 1].start)  // monotonic
