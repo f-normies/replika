@@ -1,5 +1,5 @@
 import Foundation
-import AVFoundation
+@preconcurrency import AVFoundation
 import Qwen3ASR
 
 // Reconciled speech-swift API (verified against .build/checkouts/speech-swift
@@ -13,10 +13,12 @@ import Qwen3ASR
 //           progressHandler: ((Double, String) -> Void)? = nil
 //       ) async throws -> Qwen3ASRModel
 //   }
-//   public func Qwen3ASRModel.transcribe(
-//       audio: [Float], sampleRate: Int = 16000,
-//       language: String? = nil, maxTokens: Int = 448, context: String? = nil
-//   ) -> String                                   // NOT async, NOT throws
+//   extension Qwen3ASRModel {
+//       func transcribe(
+//           audio: [Float], sampleRate: Int = 16000,
+//           language: String? = nil, maxTokens: Int = 448, context: String? = nil
+//       ) -> String                               // NOT async, NOT throws
+//   }
 //
 //   public extension Qwen3ForcedAligner {
 //       static func fromPretrained(
@@ -26,10 +28,12 @@ import Qwen3ASR
 //           progressHandler: ((Double, String) -> Void)? = nil
 //       ) async throws -> Qwen3ForcedAligner
 //   }
-//   public func Qwen3ForcedAligner.align(
-//       audio: [Float], text: String,
-//       sampleRate: Int = 16000, language: String = "English"
-//   ) -> [AlignedWord]                             // NOT async, NOT throws
+//   extension Qwen3ForcedAligner {
+//       func align(
+//           audio: [Float], text: String,
+//           sampleRate: Int = 16000, language: String = "English"
+//       ) -> [AlignedWord]                         // NOT async, NOT throws
+//   }
 //
 //   public struct AlignedWord (defined in AudioCommon/Protocols.swift,
 //   re-exported through Qwen3ASR): .text: String, .startTime: Float, .endTime: Float
@@ -55,6 +59,31 @@ import Qwen3ASR
 // (Qwen3ASRModel.largeModelId) or "aufklarer/Qwen3-ASR-0.6B-MLX-8bit"
 // (mentioned in the in-package RAM-warning message, not a named constant).
 
+// Feeds a single already-filled `AVAudioPCMBuffer` to `AVAudioConverter.convert`
+// exactly once. `AVAudioConverter.convert`'s input block is `@Sendable` under
+// strict concurrency, but the callback in fact runs synchronously within the
+// `convert(...)` call frame on the calling thread (no concurrent/async
+// invocation ever occurs), so wrapping the one-shot state in an
+// `@unchecked Sendable` class is safe here rather than racy.
+final class InputProvider: @unchecked Sendable {
+    private let buffer: AVAudioPCMBuffer
+    private var provided = false
+
+    init(_ buffer: AVAudioPCMBuffer) {
+        self.buffer = buffer
+    }
+
+    func next(_ status: UnsafeMutablePointer<AVAudioConverterInputStatus>) -> AVAudioPCMBuffer? {
+        if provided {
+            status.pointee = .noDataNow
+            return nil
+        }
+        provided = true
+        status.pointee = .haveData
+        return buffer
+    }
+}
+
 func loadMono16k(_ url: URL) throws -> [Float] {
     let file = try AVAudioFile(forReading: url)
     let src = file.processingFormat
@@ -65,11 +94,8 @@ func loadMono16k(_ url: URL) throws -> [Float] {
     let conv = AVAudioConverter(from: src, to: dst)!
     let cap = AVAudioFrameCount(Double(frames) * 16000.0 / src.sampleRate) + 1024
     let dstBuf = AVAudioPCMBuffer(pcmFormat: dst, frameCapacity: cap)!
-    var fed = false
-    _ = conv.convert(to: dstBuf, error: nil) { _, status in
-        if fed { status.pointee = .noDataNow; return nil }
-        fed = true; status.pointee = .haveData; return srcBuf
-    }
+    let provider = InputProvider(srcBuf)
+    _ = conv.convert(to: dstBuf, error: nil) { _, status in provider.next(status) }
     let ch = dstBuf.floatChannelData![0]
     return Array(UnsafeBufferPointer(start: ch, count: Int(dstBuf.frameLength)))
 }
