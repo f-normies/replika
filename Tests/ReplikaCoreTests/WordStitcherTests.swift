@@ -47,3 +47,30 @@ private func w(_ t: String, _ s: Double, _ e: Double) -> Word { Word(text: t, st
     ])
     #expect(out.map(\.text) == ["a", "c"])
 }
+
+@Test func chainedOverlapUsesImmediatelyPreviousWindowEnd() {
+    // A (non-overlap) end=10; B (overlap) boundary must be A.end=10;
+    // C (overlap) boundary must be B.end=19.5, NOT A.end. A word at ~19.3
+    // (mid 19.3) is a duplicate of B's tail: dropped only if C uses B.end.
+    let a = ChunkWindow(start: 0.0, end: 10.0, overlapsPrevious: false)
+    let b = ChunkWindow(start: 9.5, end: 19.5, overlapsPrevious: true)
+    let c = ChunkWindow(start: 19.0, end: 29.0, overlapsPrevious: true)
+    let out = WordStitcher.stitch(perWindow: [
+        (a, [w("a", 1.0, 1.2)]),
+        (b, [w("dupA", 9.6, 9.9), w("b", 11.0, 11.2)]),   // dupA mid 9.75 < 10 dropped
+        (c, [w("dupB", 19.2, 19.4), w("c", 20.0, 20.2)])  // dupB mid 19.3 < 19.5 dropped
+    ])
+    // If C wrongly used A.end (10) as its boundary, dupB (mid 19.3 >= 10) would survive.
+    #expect(out.map(\.text) == ["a", "b", "c"])
+}
+
+@Test func keepsWordExactlyAtBoundary() {
+    // Midpoint exactly equal to the boundary is kept (>=), not dropped.
+    let a = ChunkWindow(start: 0.0, end: 10.0, overlapsPrevious: false)
+    let b = ChunkWindow(start: 9.5, end: 15.0, overlapsPrevious: true)
+    let out = WordStitcher.stitch(perWindow: [
+        (a, []),
+        (b, [w("tie", 9.0, 11.0)])   // midpoint (9+11)/2 == 10.0 == boundary -> kept
+    ])
+    #expect(out.map(\.text) == ["tie"])
+}
