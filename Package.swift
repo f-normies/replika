@@ -14,7 +14,8 @@ let package = Package(
             dependencies: [
                 "ReplikaCore",
                 .product(name: "Qwen3ASR", package: "speech-swift"),
-                .product(name: "SpeechVAD", package: "speech-swift")
+                .product(name: "SpeechVAD", package: "speech-swift"),
+                .product(name: "AudioCommon", package: "speech-swift")
             ]
         ),
         .executableTarget(

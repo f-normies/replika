@@ -53,3 +53,32 @@ func smokeProducesLabeledSegments() async throws {
         }
     }
 }
+
+@Test(.enabled(if: smokeAudioURL() != nil))
+func longFormProducesManySegments() async throws {
+    let url = try #require(smokeAudioURL())
+    let samples = try AudioLoader.loadMono16k(url)
+    let durationSec = Double(samples.count) / 16000.0
+
+    let provider = SpeechSwiftProvider()
+    var done: Transcript?
+    for try await ev in provider.transcribe(.file(url), options: TranscribeOptions(diarize: true)) {
+        if case .done(let t) = ev { done = t }
+    }
+    let transcript = try #require(done)
+
+    // Regression on FINDINGS §5: single-shot transcribe() returned 0 segments
+    // on the ~9.4 min clip. Chunking must yield many labeled segments.
+    #expect(transcript.segments.count >= 5)
+
+    // Cross-segment monotonicity and coverage reaching well into the clip.
+    let starts = transcript.segments.map(\.start)
+    #expect(starts == starts.sorted())
+    if let last = transcript.segments.last {
+        #expect(last.end > durationSec * 0.5)
+    }
+
+    // Metrics only — never transcript text.
+    let coverage = (transcript.segments.last?.end ?? 0) / durationSec * 100
+    print("LONGFORM: segments=\(transcript.segments.count), coverage=\(String(format: "%.0f%%", coverage))")
+}

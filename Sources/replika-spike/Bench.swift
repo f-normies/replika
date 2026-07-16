@@ -19,13 +19,14 @@ struct BenchResult {
     let rtf: Double
     let peakMB: Double
     let loadAndRunSec: Double
+    let segments: Int
 
     var markdownRow: String {
-        String(format: "| %@ | %@ | %.2f | %.0f | %.1f |",
-               clip, quant, rtf, peakMB, loadAndRunSec)
+        String(format: "| %@ | %@ | %.2f | %.0f | %.1f | %d |",
+               clip, quant, rtf, peakMB, loadAndRunSec, segments)
     }
 
     static var markdownHeader: String {
-        "| clip | quant | RTF | peak RAM (MB) | wall (s) |\n|---|---|---|---|---|"
+        "| clip | quant | RTF | peak RAM (MB) | wall (s) | segments |\n|---|---|---|---|---|---|"
     }
 }

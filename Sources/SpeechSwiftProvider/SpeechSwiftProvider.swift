@@ -3,6 +3,7 @@ import os
 import ReplikaCore
 import Qwen3ASR
 import SpeechVAD
+import AudioCommon
 
 /// Errors specific to `SpeechSwiftProvider`.
 public enum ProviderError: Error {
@@ -90,12 +91,13 @@ public final class SpeechSwiftProvider: TranscriptionProvider, @unchecked Sendab
                 do {
                     guard case let .file(url) = audio else { throw ProviderError.unsupportedSource }
                     let samples = try AudioLoader.loadMono16k(url)
-                    continuation.yield(.progress(0.1))
+                    continuation.yield(.progress(0.05))
 
-                    // Diarization (optional).
+                    // Diarization (optional) — runs on the full buffer.
                     var tags: [SpeakerTag] = []
                     if options.diarize {
-                        let diarizer = try await SortformerDiarizer.fromPretrained()
+                        let diarizer = try await SortformerDiarizer.fromPretrained(
+                            cacheDir: try Self.modelCacheDir(for: SortformerDiarizer.defaultModelId))
                         try Task.checkCancellation()
                         let result = diarizer.diarize(audio: samples, sampleRate: 16000, config: .default)
                         self.logger.info("diarization found \(result.numSpeakers, privacy: .public) distinct speaker(s)")
@@ -104,26 +106,70 @@ public final class SpeechSwiftProvider: TranscriptionProvider, @unchecked Sendab
                         }
                         for tag in tags { continuation.yield(.speaker(tag)) }
                     }
-                    continuation.yield(.progress(0.4))
+                    continuation.yield(.progress(0.3))
 
-                    // ASR
-                    let model = try await Qwen3ASRModel.fromPretrained(modelId: options.quant.asrModelId)
+                    // Load VAD + ASR + aligner (cache relocated to Application Support).
+                    let vad = try await SileroVADModel.fromPretrained(
+                        cacheDir: try Self.modelCacheDir(for: SileroVADModel.defaultModelId))
+                    let model = try await Qwen3ASRModel.fromPretrained(
+                        modelId: options.quant.asrModelId,
+                        cacheDir: try Self.modelCacheDir(for: options.quant.asrModelId))
+                    let aligner = try await Qwen3ForcedAligner.fromPretrained(
+                        modelId: options.quant.alignerModelId,
+                        cacheDir: try Self.modelCacheDir(for: options.quant.alignerModelId))
                     try Task.checkCancellation()
-                    let text = model.transcribe(audio: samples, sampleRate: 16000,
-                                                 language: options.language == "auto" ? nil : options.language,
-                                                 context: options.contextHint)
-                    continuation.yield(.progress(0.7))
 
-                    // Word timestamps
-                    let aligner = try await Qwen3ForcedAligner.fromPretrained(modelId: options.quant.alignerModelId)
-                    try Task.checkCancellation()
-                    let aligned = aligner.align(audio: samples, text: text, sampleRate: 16000)
-                    let words = aligned.map {
-                        Word(text: $0.text, start: Double($0.startTime), end: Double($0.endTime))
+                    // VAD → bounded windows.
+                    let vadConfig = VADConfig(
+                        onset: VADConfig.sileroDefault.onset,
+                        offset: VADConfig.sileroDefault.offset,
+                        minSpeechDuration: Float(options.chunk.minSpeechSeconds),
+                        minSilenceDuration: VADConfig.sileroDefault.minSilenceDuration,
+                        windowDuration: VADConfig.sileroDefault.windowDuration,
+                        stepRatio: VADConfig.sileroDefault.stepRatio)
+                    let spans = vad.detectSpeech(audio: samples, sampleRate: 16000, config: vadConfig)
+                        .map { (start: Double($0.startTime), end: Double($0.endTime)) }
+                    let windows = ChunkPlanner.plan(spans: spans, config: options.chunk)
+
+                    // `language` here is a word-splitting hint threaded from the
+                    // request (removes the hardcoded "English"); RU uses the
+                    // whitespace fallback either way, CJK benefits from the real value.
+                    let lang: String? = options.language == "auto" ? nil : options.language
+
+                    // Per-window transcribe + align, offset to absolute time.
+                    var perWindow: [(window: ChunkWindow, words: [Word])] = []
+                    let total = max(windows.count, 1)
+                    for (i, window) in windows.enumerated() {
+                        try Task.checkCancellation()
+                        let startSample = Int(window.start * 16000)
+                        let endSample = min(Int(window.end * 16000), samples.count)
+                        guard startSample < endSample else {
+                            perWindow.append((window, []))
+                            continue
+                        }
+                        let spanAudio = Array(samples[startSample..<endSample])
+                        let text = model.transcribe(audio: spanAudio, sampleRate: 16000,
+                                                    language: lang, context: options.contextHint)
+                        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if trimmed.isEmpty {
+                            perWindow.append((window, []))
+                        } else {
+                            let aligned = aligner.align(audio: spanAudio, text: text,
+                                                        sampleRate: 16000, language: lang ?? "English")
+                            let offset = window.start
+                            let words = aligned.map {
+                                Word(text: $0.text,
+                                     start: Double($0.startTime) + offset,
+                                     end: Double($0.endTime) + offset)
+                            }
+                            perWindow.append((window, words))
+                        }
+                        continuation.yield(.progress(0.3 + 0.6 * Double(i + 1) / Double(total)))
                     }
 
-                    // Segments + speakers
-                    let base = SegmentBuilder.build(words: words)
+                    // Stitch → segments → speakers (downstream unchanged).
+                    let globalWords = WordStitcher.stitch(perWindow: perWindow)
+                    let base = SegmentBuilder.build(words: globalWords)
                     let merged = SpeakerMerger.merge(segments: base, tags: tags)
                     for seg in merged { continuation.yield(.committed(seg)) }
 
@@ -139,6 +185,18 @@ public final class SpeechSwiftProvider: TranscriptionProvider, @unchecked Sendab
             lock.lock(); self.task = work; lock.unlock()
             continuation.onTermination = { _ in work.cancel() }
         }
+    }
+
+    /// Per-model cache directory under the app's Application Support, replacing
+    /// speech-swift's default `~/Library/Caches/qwen3-speech/`. Reuses upstream's
+    /// Hub-style per-model layout via `getCacheDirectory(for:basePath:)`, so each
+    /// model still lands in its own subdirectory (no collisions).
+    static func modelCacheDir(for modelId: String) throws -> URL {
+        let base = try FileManager.default.url(
+            for: .applicationSupportDirectory, in: .userDomainMask,
+            appropriateFor: nil, create: true)
+            .appendingPathComponent("com.replika.spike", isDirectory: true)
+        return try HuggingFaceDownloader.getCacheDirectory(for: modelId, basePath: base)
     }
 
     public func cancel() {
