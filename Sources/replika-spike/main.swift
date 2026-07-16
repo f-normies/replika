@@ -62,10 +62,12 @@ let poller = Task {
 let clock = ContinuousClock()
 let start = clock.now
 let options = TranscribeOptions(language: "auto", quant: quant, diarize: diarize)
+var segmentCount = 0
 
 for try await ev in provider.transcribe(.file(url), options: options) {
     switch ev {
     case .committed(let seg):
+        segmentCount += 1
         let who = seg.speaker.map { "S\($0)" } ?? "S?"
         print("[\(fmt(seg.start))–\(fmt(seg.end))] \(who): \(seg.text)")
     case .done:
@@ -84,7 +86,8 @@ let result = BenchResult(
     quant: quant.rawValue,
     rtf: audioSeconds / max(wall, 0.0001),
     peakMB: Double(peak.value) / 1_048_576.0,
-    loadAndRunSec: wall
+    loadAndRunSec: wall,
+    segments: segmentCount
 )
 print("\n" + BenchResult.markdownHeader)
 print(result.markdownRow)
