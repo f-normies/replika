@@ -48,3 +48,20 @@ private let cfg = ChunkConfig(maxChunkSeconds: 10.0, overlapSeconds: 0.5)
     // A new span never overlaps the previous span (silence separates them).
     #expect(w[1] == ChunkWindow(start: 5.0, end: 7.0, overlapsPrevious: false))
 }
+
+@Test func degenerateOverlapTerminatesWithBoundedWindows() {
+    // overlapSeconds >= maxChunkSeconds must not hang; windows stay bounded.
+    let bad = ChunkConfig(maxChunkSeconds: 5.0, overlapSeconds: 5.0)
+    let w = ChunkPlanner.plan(spans: [(0.0, 12.0)], config: bad)
+    #expect(!w.isEmpty)
+    #expect(w.count < 100)
+    #expect(w.allSatisfy { $0.end - $0.start <= 5.0 + 1e-9 })
+    #expect(w.last?.end == 12.0)
+}
+
+@Test func nonPositiveMaxYieldsSingleWindowPerSpan() {
+    let bad = ChunkConfig(maxChunkSeconds: 0.0, overlapSeconds: 0.0)
+    let w = ChunkPlanner.plan(spans: [(0.0, 12.0)], config: bad)
+    #expect(w.count == 1)
+    #expect(w[0] == ChunkWindow(start: 0.0, end: 12.0, overlapsPrevious: false))
+}

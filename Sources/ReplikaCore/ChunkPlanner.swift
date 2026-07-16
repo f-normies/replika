@@ -17,6 +17,19 @@ public struct ChunkWindow: Sendable, Equatable {
 public enum ChunkPlanner {
     public static func plan(spans: [(start: Double, end: Double)],
                             config: ChunkConfig) -> [ChunkWindow] {
+        // A non-positive max would leave every long span un-splittable; emit
+        // each span as a single window so the loop below can never spin
+        // without advancing.
+        guard config.maxChunkSeconds > 0 else {
+            return spans.map { ChunkWindow(start: $0.start, end: $0.end, overlapsPrevious: false) }
+        }
+        // Clamp the overlap so each sub-window strictly advances: a configured
+        // overlap >= maxChunkSeconds (degenerate tuning) would otherwise leave
+        // winStart stationary and loop forever. Valid overlaps pass through.
+        let effectiveOverlap = config.overlapSeconds < config.maxChunkSeconds
+            ? max(config.overlapSeconds, 0)
+            : config.maxChunkSeconds / 2
+
         var windows: [ChunkWindow] = []
         for span in spans {
             if span.end - span.start <= config.maxChunkSeconds {
@@ -30,7 +43,7 @@ public enum ChunkPlanner {
                 windows.append(ChunkWindow(start: winStart, end: winEnd,
                                            overlapsPrevious: winStart > span.start))
                 if winEnd >= span.end { break }
-                winStart = winEnd - config.overlapSeconds
+                winStart = winEnd - effectiveOverlap
             }
         }
         return windows
