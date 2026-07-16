@@ -483,6 +483,7 @@ git commit -m "fix(core): map file.read failure + guard frame-count cast in Audi
 ### Task 5: Provider VAD-chunk integration (loop + language plumbing + cache relocation)
 
 **Files:**
+- Modify: `Package.swift:12-19` — add the `AudioCommon` product to the `SpeechSwiftProvider` target deps (needed for `HuggingFaceDownloader`).
 - Modify: `Sources/SpeechSwiftProvider/SpeechSwiftProvider.swift:1-5,86-142` (imports + `transcribe` body; add a cache-dir helper)
 - Test: `Tests/SpeechSwiftProviderTests/SmokeTests.swift` (append long-form E2E)
 
@@ -533,9 +534,23 @@ RUN_MODEL_TESTS=1 SMOKE_AUDIO="$PWD/call_2026-07-14_15-05-51.m4a" swift test --f
 ```
 Expected: FAIL — `transcript.segments.count >= 5` is false (current provider yields 0 segments on long audio). If `SMOKE_AUDIO`/`RUN_MODEL_TESTS` are unset the test is skipped; set them to see the red.
 
-- [ ] **Step 3: Rewrite the provider imports and `transcribe` body**
+- [ ] **Step 3: Add the AudioCommon dependency, then rewrite the provider imports and `transcribe` body**
 
-In `Sources/SpeechSwiftProvider/SpeechSwiftProvider.swift`, set the imports (lines 1-5) to:
+First, in `Package.swift`, add the `AudioCommon` product to the `SpeechSwiftProvider` target's `dependencies` (it currently lists `ReplikaCore`, `Qwen3ASR`, `SpeechVAD`) so `import AudioCommon` / `HuggingFaceDownloader` resolve:
+
+```swift
+        .target(
+            name: "SpeechSwiftProvider",
+            dependencies: [
+                "ReplikaCore",
+                .product(name: "Qwen3ASR", package: "speech-swift"),
+                .product(name: "SpeechVAD", package: "speech-swift"),
+                .product(name: "AudioCommon", package: "speech-swift")
+            ]
+        ),
+```
+
+Then, in `Sources/SpeechSwiftProvider/SpeechSwiftProvider.swift`, set the imports (lines 1-5) to:
 
 ```swift
 import Foundation
@@ -687,7 +702,7 @@ NOTE (spec §11 risk): read the printed distinct-speaker count from `smokeProduc
 - [ ] **Step 6: Commit**
 
 ```bash
-git add Sources/SpeechSwiftProvider/SpeechSwiftProvider.swift Tests/SpeechSwiftProviderTests/SmokeTests.swift
+git add Package.swift Sources/SpeechSwiftProvider/SpeechSwiftProvider.swift Tests/SpeechSwiftProviderTests/SmokeTests.swift
 git commit -m "feat(provider): VAD-chunked long-form transcribe; thread language; relocate model cache"
 ```
 
