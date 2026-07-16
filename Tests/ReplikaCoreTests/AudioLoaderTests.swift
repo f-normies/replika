@@ -28,3 +28,21 @@ private func writeSineWav(_ url: URL, seconds: Double, sampleRate: Double) throw
     #expect(abs(samples.count - 16000) < 400)
     #expect(samples.contains { $0 != 0 })
 }
+
+@Test func throwsAudioLoaderErrorOnMissingFile() {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("missing_\(UUID().uuidString).wav")
+    #expect(throws: AudioLoaderError.self) {
+        _ = try AudioLoader.loadMono16k(url)
+    }
+}
+
+@Test func throwsAudioLoaderErrorOnCorruptFile() throws {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("garbage_\(UUID().uuidString).wav")
+    try Data([0x00, 0x01, 0x02, 0x03, 0x04, 0x05]).write(to: url)
+    defer { try? FileManager.default.removeItem(at: url) }
+    #expect(throws: AudioLoaderError.self) {
+        _ = try AudioLoader.loadMono16k(url)
+    }
+}

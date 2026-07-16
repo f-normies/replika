@@ -3,6 +3,7 @@
 public enum AudioLoaderError: Error {
     case cannotOpen(URL)
     case conversionFailed
+    case readFailed(URL)
 }
 
 /// Feeds a single already-filled `AVAudioPCMBuffer` to `AVAudioConverter.convert`
@@ -38,11 +39,16 @@ public enum AudioLoader {
         catch { throw AudioLoaderError.cannotOpen(url) }
 
         let src = file.processingFormat
+        guard file.length >= 0,
+              file.length <= AVAudioFramePosition(AVAudioFrameCount.max) else {
+            throw AudioLoaderError.conversionFailed
+        }
         let frames = AVAudioFrameCount(file.length)
         guard let srcBuf = AVAudioPCMBuffer(pcmFormat: src, frameCapacity: frames) else {
             throw AudioLoaderError.conversionFailed
         }
-        try file.read(into: srcBuf)
+        do { try file.read(into: srcBuf) }
+        catch { throw AudioLoaderError.readFailed(url) }
 
         guard let dst = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000,
                                       channels: 1, interleaved: false),
