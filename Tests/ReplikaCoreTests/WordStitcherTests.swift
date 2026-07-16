@@ -74,3 +74,15 @@ private func w(_ t: String, _ s: Double, _ e: Double) -> Word { Word(text: t, st
     ])
     #expect(out.map(\.text) == ["tie"])
 }
+
+@Test func emptyForceSplitPredecessorKeepsSuccessorOverlapWords() {
+    // W0 (force-split head) transcribed empty; W1 overlaps it. W1's word in the
+    // overlap band [9.5,10] must NOT be dropped — W0 emitted nothing to duplicate.
+    let w0 = ChunkWindow(start: 0.0, end: 10.0, overlapsPrevious: false)
+    let w1 = ChunkWindow(start: 9.5, end: 19.5, overlapsPrevious: true)
+    let out = WordStitcher.stitch(perWindow: [
+        (w0, []),
+        (w1, [w("x", 9.6, 9.9), w("y", 11.0, 11.2)])
+    ])
+    #expect(out.map(\.text) == ["x", "y"])
+}
