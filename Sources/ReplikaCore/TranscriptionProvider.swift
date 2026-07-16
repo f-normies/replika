@@ -25,10 +25,13 @@ public struct TranscribeOptions: Sendable {
     public let quant: Quant
     public let diarize: Bool
     public let contextHint: String?
+    public let chunk: ChunkConfig
     public init(language: String = "auto", quant: Quant = .q4,
-                diarize: Bool = true, contextHint: String? = nil) {
+                diarize: Bool = true, contextHint: String? = nil,
+                chunk: ChunkConfig = ChunkConfig()) {
         self.language = language; self.quant = quant
         self.diarize = diarize; self.contextHint = contextHint
+        self.chunk = chunk
     }
 }
 
